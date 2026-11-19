@@ -45,6 +45,7 @@
 #include "fc/core.h"
 #include "fc/rc.h"
 #include "fc/rc_controls.h"
+#include "fc/rc_modes.h"
 #include "fc/runtime_config.h"
 
 #include "flight/gps_rescue.h"
@@ -436,17 +437,21 @@ STATIC_UNIT_TESTED FAST_CODE_NOINLINE float calcHorizonLevelStrength(void)
 // Use the FAST_CODE_NOINLINE directive to avoid this code from being inlined into ITCM RAM to avoid overflow.
 // The impact is possibly slightly slower performance on F7/H7 but they have more than enough
 // processing power that it should be a non-issue.
-STATIC_UNIT_TESTED FAST_CODE_NOINLINE float pidLevel(int axis, const pidProfile_t *pidProfile, const rollAndPitchTrims_t *angleTrim,
-                                                        float currentPidSetpoint, float horizonLevelStrength)
+static float pidLevelTargetAngle(int axis, const pidProfile_t *pidProfile)
 {
     const float levelAngleLimit = pidProfile->levelAngleLimit;
-    // calculate error angle and limit the angle to the max inclination
     // rcDeflection is in range [-1.0, 1.0]
     float angle = levelAngleLimit * getLevelModeRcDeflection(axis);
 #ifdef USE_GPS_RESCUE
     angle += gpsRescueAngle[axis] / 100; // ANGLE IS IN CENTIDEGREES
 #endif
-    angle = constrainf(angle, -levelAngleLimit, levelAngleLimit);
+    return constrainf(angle, -levelAngleLimit, levelAngleLimit);
+}
+
+STATIC_UNIT_TESTED FAST_CODE_NOINLINE float pidLevel(int axis, const pidProfile_t *pidProfile, const rollAndPitchTrims_t *angleTrim,
+                                                        float currentPidSetpoint, float horizonLevelStrength)
+{
+    const float angle = pidLevelTargetAngle(axis, pidProfile);
     const float errorAngle = angle - ((attitude.raw[axis] - angleTrim->raw[axis]) / 10.0f);
     if (FLIGHT_MODE(ANGLE_MODE) || FLIGHT_MODE(GPS_RESCUE_MODE)) {
         // ANGLE mode - control is angle based
@@ -836,9 +841,20 @@ static FAST_CODE_NOINLINE float applyLaunchControl(int axis, const rollAndPitchT
 
 #if GROUP2_LQR_ENABLED
 static const lqrAxisGains_t group2LqrGains[2] = {
-    { 0.0f, 0.0f }, // Roll
-    { 0.0f, 0.0f }  // Pitch
+    { 0.0f, 0.0f }, // Roll: intentionally unvalidated
+    { 0.0f, 0.0f }  // Pitch: intentionally unvalidated
 };
+
+static bool group2LqrSelected;
+
+static bool group2LqrIsSelected(void)
+{
+    // Latch the selection while disarmed so it cannot change in flight.
+    if (!ARMING_FLAG(ARMED)) {
+        group2LqrSelected = IS_RC_MODE_ACTIVE(BOXUSER1);
+    }
+    return group2LqrSelected;
+}
 #endif
 
 void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTimeUs)
@@ -857,6 +873,9 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
 #endif
 
     const bool launchControlActive = isLaunchControlActive();
+#if GROUP2_LQR_ENABLED
+    const bool group2LqrActive = group2LqrIsSelected();
+#endif
 
 #if defined(USE_ACC)
     static timeUs_t levelModeStartTimeUs = 0;
@@ -952,6 +971,9 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
     for (int axis = FD_ROLL; axis <= FD_YAW; ++axis) {
 
         float currentPidSetpoint = getSetpointRate(axis);
+#if GROUP2_LQR_ENABLED
+        float targetAngle = 0.0f;
+#endif
         if (pidRuntime.maxVelocity[axis]) {
             currentPidSetpoint = accelerationLimit(axis, currentPidSetpoint);
         }
@@ -960,6 +982,9 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
 #if defined(USE_ACC)
         if ((levelMode == LEVEL_MODE_R && axis == FD_ROLL)
             || (levelMode == LEVEL_MODE_RP && (axis == FD_ROLL || axis ==  FD_PITCH)) ) {
+#if GROUP2_LQR_ENABLED
+            targetAngle = pidLevelTargetAngle(axis, pidProfile);
+#endif
             currentPidSetpoint = pidLevel(axis, pidProfile, angleTrim, currentPidSetpoint, horizonLevelStrength);
             DEBUG_SET(DEBUG_ATTITUDE, axis - FD_ROLL + 2, currentPidSetpoint);
         }
@@ -1188,22 +1213,33 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
             pidData[axis].Sum = pidSum;
 
 #if GROUP2_LQR_ENABLED
-            if (axis == FD_ROLL || axis == FD_PITCH) {
+            if (group2LqrActive
+                && FLIGHT_MODE(ANGLE_MODE)
+                && !FLIGHT_MODE(HORIZON_MODE)
+                && !FLIGHT_MODE(GPS_RESCUE_MODE)
+                && levelMode == LEVEL_MODE_RP
+                && !pidRuntime.inCrashRecoveryMode
+                && !launchControlActive
+                && (axis == FD_ROLL || axis == FD_PITCH)) {
                 const float measuredAngle =
                     (axis == FD_ROLL
-                        ? attitude.values.roll
-                        : attitude.values.pitch) / 10.0f;
+                        ? attitude.raw[FD_ROLL] - angleTrim->raw[FD_ROLL]
+                        : attitude.raw[FD_PITCH] - angleTrim->raw[FD_PITCH]) / 10.0f;
 
                 const lqrAxisState_t state = {
                     .angle = measuredAngle,
                     .rate = gyro.gyroADCf[axis]
                 };
 
-                // Experimental output: requires validated gains,
-                // target-angle mapping, and output scaling.
+                // Experimental output: gains and PID-sum scaling must be
+                // validated before enabling GROUP2_LQR_ENABLED.
+                pidData[axis].P = 0;
+                pidData[axis].I = 0;
+                pidData[axis].D = 0;
+                pidData[axis].F = 0;
                 pidData[axis].Sum = lqrCalculateAxis(
                     state,
-                    0.0f,
+                    targetAngle,
                     group2LqrGains[axis]
                 );
             }
