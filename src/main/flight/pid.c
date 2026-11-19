@@ -1,3 +1,4 @@
+#include "flight/lqr.h"
 /*
  * This file is part of Cleanflight and Betaflight.
  *
@@ -828,6 +829,18 @@ static FAST_CODE_NOINLINE float applyLaunchControl(int axis, const rollAndPitchT
 
 // Betaflight pid controller, which will be maintained in the future with additional features specialised for current (mini) multirotor usage.
 // Based on 2DOF reference design (matlab)
+
+// Group 2 experimental LQR controller
+// Disabled until gains and switching are validated.
+#define GROUP2_LQR_ENABLED 0
+
+#if GROUP2_LQR_ENABLED
+static const lqrAxisGains_t group2LqrGains[2] = {
+    { 0.0f, 0.0f }, // Roll
+    { 0.0f, 0.0f }  // Pitch
+};
+#endif
+
 void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTimeUs)
 {
     static float previousGyroRateDterm[XYZ_AXIS_COUNT];
@@ -1173,6 +1186,28 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
 #endif
         {
             pidData[axis].Sum = pidSum;
+
+#if GROUP2_LQR_ENABLED
+            if (axis == FD_ROLL || axis == FD_PITCH) {
+                const float measuredAngle =
+                    (axis == FD_ROLL
+                        ? attitude.values.roll
+                        : attitude.values.pitch) / 10.0f;
+
+                const lqrAxisState_t state = {
+                    .angle = measuredAngle,
+                    .rate = gyro.gyroADCf[axis]
+                };
+
+                // Experimental output: requires validated gains,
+                // target-angle mapping, and output scaling.
+                pidData[axis].Sum = lqrCalculateAxis(
+                    state,
+                    0.0f,
+                    group2LqrGains[axis]
+                );
+            }
+#endif
         }
     }
 
