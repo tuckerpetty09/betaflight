@@ -1,8 +1,10 @@
 #pragma once
 
+#include <stdbool.h>
+
 typedef struct {
-    float angle; // degrees
-    float rate;  // degrees/second
+    float angle; // radians
+    float rate;  // radians/second
 } lqrAxisState_t;
 
 typedef struct {
@@ -10,9 +12,11 @@ typedef struct {
     float rateGain;
 } lqrAxisGains_t;
 
-// Returns a controller output in the PID sum's existing axis units.
-float lqrCalculateAxis(
+// Calculates a controller output in the PID sum's existing axis units.
+// Gains and state use SI radians and radians/second.
+bool lqrCalculateAxis(
     lqrAxisState_t state,
-    float targetAngle, // degrees
-    lqrAxisGains_t gains
+    float targetAngle, // radians
+    lqrAxisGains_t gains,
+    float *output
 );

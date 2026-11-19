@@ -1221,27 +1221,32 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
                 && !pidRuntime.inCrashRecoveryMode
                 && !launchControlActive
                 && (axis == FD_ROLL || axis == FD_PITCH)) {
-                const float measuredAngle =
+                const float measuredAngleDegrees =
                     (axis == FD_ROLL
                         ? attitude.raw[FD_ROLL] - angleTrim->raw[FD_ROLL]
                         : attitude.raw[FD_PITCH] - angleTrim->raw[FD_PITCH]) / 10.0f;
 
                 const lqrAxisState_t state = {
-                    .angle = measuredAngle,
-                    .rate = gyro.gyroADCf[axis]
+                    .angle = measuredAngleDegrees * (M_PIf / 180.0f),
+                    .rate = gyro.gyroADCf[axis] * (M_PIf / 180.0f)
                 };
+                const float targetAngleRadians = targetAngle * (M_PIf / 180.0f);
+                float lqrOutput;
 
                 // Experimental output: gains and PID-sum scaling must be
                 // validated before enabling GROUP2_LQR_ENABLED.
-                pidData[axis].P = 0;
-                pidData[axis].I = 0;
-                pidData[axis].D = 0;
-                pidData[axis].F = 0;
-                pidData[axis].Sum = lqrCalculateAxis(
+                if (lqrCalculateAxis(
                     state,
-                    targetAngle,
-                    group2LqrGains[axis]
-                );
+                    targetAngleRadians,
+                    group2LqrGains[axis],
+                    &lqrOutput
+                )) {
+                    pidData[axis].P = 0;
+                    pidData[axis].I = 0;
+                    pidData[axis].D = 0;
+                    pidData[axis].F = 0;
+                    pidData[axis].Sum = lqrOutput;
+                }
             }
 #endif
         }
