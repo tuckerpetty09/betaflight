@@ -51,3 +51,69 @@ TEST(Lqr, RejectsInvalidInputsAndOutputs)
     EXPECT_FALSE(lqrCalculateAxis(state, 1.0f, overflowingGains, &output));
     EXPECT_FLOAT_EQ(7.0f, output);
 }
+
+TEST(LqrSwitch, SelectsLqrBeforeArming)
+{
+    lqrSwitchState_t state = {};
+
+    EXPECT_FALSE(lqrUpdateSelection(&state, false, true, true));
+    EXPECT_TRUE(lqrUpdateSelection(&state, true, true, true));
+}
+
+TEST(LqrSwitch, CannotEnableLqrMidFlight)
+{
+    lqrSwitchState_t state = {};
+
+    EXPECT_FALSE(lqrUpdateSelection(&state, false, false, true));
+    EXPECT_FALSE(lqrUpdateSelection(&state, true, true, true));
+}
+
+TEST(LqrSwitch, EmergencySwitchLocksOutLqr)
+{
+    lqrSwitchState_t state = {};
+
+    lqrUpdateSelection(&state, false, true, true);
+    EXPECT_TRUE(lqrUpdateSelection(&state, true, true, true));
+
+    EXPECT_FALSE(lqrUpdateSelection(&state, true, false, true));
+    EXPECT_TRUE(state.lockedOut);
+    EXPECT_FALSE(lqrUpdateSelection(&state, true, true, true));
+}
+
+TEST(LqrSwitch, IncompatibleModeTriggersFallback)
+{
+    lqrSwitchState_t state = {};
+
+    lqrUpdateSelection(&state, false, true, true);
+    EXPECT_TRUE(lqrUpdateSelection(&state, true, true, true));
+
+    EXPECT_FALSE(lqrUpdateSelection(&state, true, true, false));
+    EXPECT_TRUE(state.lockedOut);
+    EXPECT_FALSE(lqrUpdateSelection(&state, true, true, true));
+}
+
+TEST(LqrSwitch, ForcedFallbackLocksOutLqr)
+{
+    lqrSwitchState_t state = {};
+
+    lqrUpdateSelection(&state, false, true, true);
+    EXPECT_TRUE(lqrUpdateSelection(&state, true, true, true));
+
+    lqrForceFallback(&state);
+
+    EXPECT_TRUE(state.lockedOut);
+    EXPECT_FALSE(lqrUpdateSelection(&state, true, true, true));
+}
+
+TEST(LqrSwitch, DisarmingResetsLockout)
+{
+    lqrSwitchState_t state = {};
+
+    lqrUpdateSelection(&state, false, true, true);
+    lqrUpdateSelection(&state, true, true, true);
+    lqrForceFallback(&state);
+
+    EXPECT_FALSE(lqrUpdateSelection(&state, false, true, true));
+    EXPECT_FALSE(state.lockedOut);
+    EXPECT_TRUE(lqrUpdateSelection(&state, true, true, true));
+}

@@ -20,3 +20,17 @@ bool lqrCalculateAxis(
     lqrAxisGains_t gains,
     float *output
 );
+
+typedef struct {
+    bool selected;
+    bool lockedOut;
+} lqrSwitchState_t;
+
+bool lqrUpdateSelection(
+    lqrSwitchState_t *state,
+    bool armed,
+    bool requested,
+    bool modeAllowed
+);
+
+void lqrForceFallback(lqrSwitchState_t *state);

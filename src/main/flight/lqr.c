@@ -30,3 +30,29 @@ bool lqrCalculateAxis(
     *output = calculatedOutput;
     return true;
 }
+
+void lqrForceFallback(lqrSwitchState_t *state)
+{
+    state->selected = false;
+    state->lockedOut = true;
+}
+
+bool lqrUpdateSelection(
+    lqrSwitchState_t *state,
+    bool armed,
+    bool requested,
+    bool modeAllowed
+)
+{
+    if (!armed) {
+        state->lockedOut = false;
+        state->selected = requested;
+        return false;
+    }
+
+    if (state->selected && (!requested || !modeAllowed)) {
+        lqrForceFallback(state);
+    }
+
+    return state->selected && !state->lockedOut;
+}

@@ -849,25 +849,8 @@ static const lqrAxisGains_t group2LqrGains[2] = {
         { 0.0172f, 0.0025f }  // Pitch
 };
 
-static bool group2LqrSelected = false;
-static bool group2LqrLockedOut = false;
+static lqrSwitchState_t group2LqrSwitchState = {0};
 
-static bool group2LqrIsSelected(void)
-{
-    const bool user1Active = IS_RC_MODE_ACTIVE(BOXUSER1);
-
-    if (!ARMING_FLAG(ARMED)) {
-        // Reset lockout and allow selection before arming.
-        group2LqrLockedOut = false;
-        group2LqrSelected = user1Active;
-    } else if (group2LqrSelected && !user1Active) {
-        // USER1 turned off during flight: fall back to PID.
-        group2LqrSelected = false;
-        group2LqrLockedOut = true;
-    }
-
-    return group2LqrSelected && !group2LqrLockedOut;
-}
 #endif
 
 void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTimeUs)
@@ -887,18 +870,16 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
 
     const bool launchControlActive = isLaunchControlActive();
 #if GROUP2_LQR_ENABLED
-        bool group2LqrActive = group2LqrIsSelected();
-
-    if (ARMING_FLAG(ARMED) && group2LqrActive
-        && (!FLIGHT_MODE(ANGLE_MODE)
-            || FLIGHT_MODE(HORIZON_MODE)
-            || FLIGHT_MODE(GPS_RESCUE_MODE)
-            || pidRuntime.inCrashRecoveryMode
-            || launchControlActive)) {
-        group2LqrSelected = false;
-        group2LqrLockedOut = true;
-        group2LqrActive = false;
-    }
+    bool group2LqrActive = lqrUpdateSelection(
+        &group2LqrSwitchState,
+        ARMING_FLAG(ARMED),
+        IS_RC_MODE_ACTIVE(BOXUSER1),
+        FLIGHT_MODE(ANGLE_MODE)
+            && !FLIGHT_MODE(HORIZON_MODE)
+            && !FLIGHT_MODE(GPS_RESCUE_MODE)
+            && !pidRuntime.inCrashRecoveryMode
+            && !launchControlActive
+    );
 #endif
 
 #if defined(USE_ACC)
@@ -989,6 +970,11 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
 
 #ifdef USE_FEEDFORWARD
     const bool newRcFrame = getShouldUpdateFeedforward();
+#endif
+
+#if GROUP2_LQR_ENABLED && defined(USE_ACC)
+    float group2LqrOutput[2] = {0};
+    bool group2LqrValid[2] = {false};
 #endif
 
     // ----------PID controller----------
@@ -1236,46 +1222,50 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
         {
             pidData[axis].Sum = pidSum;
 
-#if GROUP2_LQR_ENABLED
+#if GROUP2_LQR_ENABLED && defined(USE_ACC)
             if (group2LqrActive
-                && FLIGHT_MODE(ANGLE_MODE)
-                && !FLIGHT_MODE(HORIZON_MODE)
-                && !FLIGHT_MODE(GPS_RESCUE_MODE)
                 && levelMode == LEVEL_MODE_RP
-                && !pidRuntime.inCrashRecoveryMode
-                && !launchControlActive
                 && (axis == FD_ROLL || axis == FD_PITCH)) {
-                const float measuredAngleDegrees =
-                    (axis == FD_ROLL
-                        ? attitude.raw[FD_ROLL] - angleTrim->raw[FD_ROLL]
-                        : attitude.raw[FD_PITCH] - angleTrim->raw[FD_PITCH]) / 10.0f;
 
                 const lqrAxisState_t state = {
-                    .angle = measuredAngleDegrees * (M_PIf / 180.0f),
+                    .angle = ((attitude.raw[axis] - angleTrim->raw[axis]) / 10.0f)
+                        * (M_PIf / 180.0f),
                     .rate = gyro.gyroADCf[axis] * (M_PIf / 180.0f)
                 };
-                const float targetAngleRadians = targetAngle * (M_PIf / 180.0f);
-                float lqrOutput;
 
-                // Experimental output: gains and PID-sum scaling must be
-                // validated before enabling GROUP2_LQR_ENABLED.
-                if (lqrCalculateAxis(
+                group2LqrValid[axis] = lqrCalculateAxis(
                     state,
-                    targetAngleRadians,
+                    targetAngle * (M_PIf / 180.0f),
                     group2LqrGains[axis],
-                    &lqrOutput
-                )) {
-                    pidData[axis].P = 0;
-                    pidData[axis].I = 0;
-                    pidData[axis].D = 0;
-                    pidData[axis].F = 0;
-                    const float limitedLqrTorque = constrainf(lqrOutput, -0.003f, 0.003f);
-                    pidData[axis].Sum = limitedLqrTorque * GROUP2_LQR_PID_SUM_PER_NM;
-                }
+                    &group2LqrOutput[axis]
+                );
             }
 #endif
         }
     }
+
+#if GROUP2_LQR_ENABLED && defined(USE_ACC)
+    if (group2LqrActive) {
+        if (group2LqrValid[FD_ROLL]
+            && group2LqrValid[FD_PITCH]
+            && !pidRuntime.inCrashRecoveryMode
+            && !gyroOverflowDetected()
+#ifdef USE_YAW_SPIN_RECOVERY
+            && !yawSpinActive
+#endif
+            ) {
+            for (int axis = FD_ROLL; axis <= FD_PITCH; ++axis) {
+                const float limitedTorque =
+                    constrainf(group2LqrOutput[axis], -0.003f, 0.003f);
+
+                pidData[axis].Sum =
+                    limitedTorque * GROUP2_LQR_PID_SUM_PER_NM;
+            }
+        } else {
+            lqrForceFallback(&group2LqrSwitchState);
+        }
+    }
+#endif
 
     // Disable PID control if at zero throttle or if gyro overflow detected
     // This may look very innefficient, but it is done on purpose to always show real CPU usage as in flight
