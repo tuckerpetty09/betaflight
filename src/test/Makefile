@@ -157,6 +157,9 @@ flight_mixer_unittest :=  \
 		$(USER_DIR)/flight/servos.c \
 		$(USER_DIR)/common/maths.c
 
+lqr_unittest_SRC := \
+		$(USER_DIR)/flight/lqr.c
+
 
 gps_conversion_unittest_SRC := \
 		$(USER_DIR)/common/gps_conversion.c
