@@ -656,7 +656,7 @@ GTEST_SRCS_ = $(GTEST_DIR)/src/*.cc $(GTEST_DIR)/inc/gtest/*.h $(GTEST_HEADERS)
 $(OBJECT_DIR)/gtest-all.o : $(GTEST_SRCS_)
 	@echo "compiling $@" "$(STDOUT)"
 	@mkdir -p $(dir $@)
-	$(V1) $(CXX) $(CXX_FLAGS) -I$(GTEST_DIR) -Wno-missing-field-initializers -Wno-unused-const-variable -c \
+	$(V1) $(CXX) $(CXX_FLAGS) -I$(GTEST_DIR) -Wno-missing-field-initializers -Wno-unused-const-variable -Wno-error=uninitialized-const-pointer -c \
             $(GTEST_DIR)/src/gtest-all.cc -o $@
 
 $(OBJECT_DIR)/gtest_main.o : $(GTEST_SRCS_)
