@@ -839,13 +839,17 @@ static FAST_CODE_NOINLINE float applyLaunchControl(int axis, const rollAndPitchT
 // Disabled until gains and switching are validated.
 #define GROUP2_LQR_ENABLED 0
 
+// Experimental torque-to-PID conversion from MATLAB simulation.
+// Assumes 100 g maximum thrust per motor and 95 mm wheelbase.
+// NOT calibrated for actual flight.
+#define GROUP2_LQR_PID_SUM_PER_NM 7587.39f
 #if GROUP2_LQR_ENABLED
 static const lqrAxisGains_t group2LqrGains[2] = {
-    { 0.0f, 0.0f }, // Roll: intentionally unvalidated
-    { 0.0f, 0.0f }  // Pitch: intentionally unvalidated
+        { 0.0172f, 0.0025f }, // Roll
+        { 0.0172f, 0.0025f }  // Pitch
 };
 
-static bool group2LqrSelected;
+static bool group2LqrSelected = false;
 
 static bool group2LqrIsSelected(void)
 {
@@ -1245,7 +1249,8 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
                     pidData[axis].I = 0;
                     pidData[axis].D = 0;
                     pidData[axis].F = 0;
-                    pidData[axis].Sum = lqrOutput;
+                    const float limitedLqrTorque = constrainf(lqrOutput, -0.003f, 0.003f);
+                    pidData[axis].Sum = limitedLqrTorque * GROUP2_LQR_PID_SUM_PER_NM;
                 }
             }
 #endif
