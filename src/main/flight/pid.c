@@ -837,7 +837,7 @@ static FAST_CODE_NOINLINE float applyLaunchControl(int axis, const rollAndPitchT
 
 // Group 2 experimental LQR controller
 // Disabled until gains and switching are validated.
-#define GROUP2_LQR_ENABLED 0
+#define GROUP2_LQR_ENABLED 1
 
 // Experimental torque-to-PID conversion from MATLAB simulation.
 // Assumes 100 g maximum thrust per motor and 95 mm wheelbase.
@@ -850,14 +850,23 @@ static const lqrAxisGains_t group2LqrGains[2] = {
 };
 
 static bool group2LqrSelected = false;
+static bool group2LqrLockedOut = false;
 
 static bool group2LqrIsSelected(void)
 {
-    // Latch the selection while disarmed so it cannot change in flight.
+    const bool user1Active = IS_RC_MODE_ACTIVE(BOXUSER1);
+
     if (!ARMING_FLAG(ARMED)) {
-        group2LqrSelected = IS_RC_MODE_ACTIVE(BOXUSER1);
+        // Reset lockout and allow selection before arming.
+        group2LqrLockedOut = false;
+        group2LqrSelected = user1Active;
+    } else if (group2LqrSelected && !user1Active) {
+        // USER1 turned off during flight: fall back to PID.
+        group2LqrSelected = false;
+        group2LqrLockedOut = true;
     }
-    return group2LqrSelected;
+
+    return group2LqrSelected && !group2LqrLockedOut;
 }
 #endif
 
@@ -878,7 +887,18 @@ void FAST_CODE pidController(const pidProfile_t *pidProfile, timeUs_t currentTim
 
     const bool launchControlActive = isLaunchControlActive();
 #if GROUP2_LQR_ENABLED
-    const bool group2LqrActive = group2LqrIsSelected();
+        bool group2LqrActive = group2LqrIsSelected();
+
+    if (ARMING_FLAG(ARMED) && group2LqrActive
+        && (!FLIGHT_MODE(ANGLE_MODE)
+            || FLIGHT_MODE(HORIZON_MODE)
+            || FLIGHT_MODE(GPS_RESCUE_MODE)
+            || pidRuntime.inCrashRecoveryMode
+            || launchControlActive)) {
+        group2LqrSelected = false;
+        group2LqrLockedOut = true;
+        group2LqrActive = false;
+    }
 #endif
 
 #if defined(USE_ACC)
